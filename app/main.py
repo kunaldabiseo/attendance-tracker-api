@@ -135,6 +135,23 @@ def _prepare_file_content(content: bytes, filename: str) -> Tuple[List[str], byt
     return _extract_csv_headers(content), content
 
 
+def _filter_rows_by_date(rows: List[dict], filter_from: Optional[str], filter_to: Optional[str]) -> List[dict]:
+    """Filter rows by _local_date within [filter_from, filter_to] inclusive."""
+    if not filter_from and not filter_to:
+        return rows
+    filtered = []
+    for r in rows:
+        d = r.get("_local_date")
+        if not d:
+            continue
+        if filter_from and d < filter_from:
+            continue
+        if filter_to and d > filter_to:
+            continue
+        filtered.append(r)
+    return filtered
+
+
 @app.post("/upload-paste", response_model=UploadResponse)
 async def upload_pasted_data(payload: dict = Body(...)):
     """Handle pasted CSV data from frontend."""
@@ -144,6 +161,9 @@ async def upload_pasted_data(payload: dict = Body(...)):
     data_list = payload.get("data", [])
     if not data_list:
         raise HTTPException(status_code=400, detail="No data provided")
+    
+    filter_from = payload.get("filter_from")  # YYYY-MM-DD
+    filter_to = payload.get("filter_to")  # YYYY-MM-DD
     
     parsed_bytes: Dict[str, bytes] = {}
     found_counts = {"checkin": 0, "checkout": 0, "breaks": 0}
@@ -182,32 +202,44 @@ async def upload_pasted_data(payload: dict = Body(...)):
     # IMPORTANT: Always clear ALL old data first to prevent mixing old and new data
     store.clear()
     
+    row_counts = {"checkin": 0, "checkout": 0, "breaks": 0}
+    
     # Then update with new data
     if "checkin" in parsed_bytes:
         parsed_checkins, errors = parse_checkin_csv(parsed_bytes["checkin"])
         if errors:
             logger.warning("Errors parsing check-in data: %s", errors[:5])
+        parsed_checkins = _filter_rows_by_date(parsed_checkins, filter_from, filter_to)
         store.update("checkin", parsed_checkins)
+        row_counts["checkin"] = len(parsed_checkins)
         logger.info("Uploaded %d check-in records", len(parsed_checkins))
     
     if "checkout" in parsed_bytes:
         parsed_checkouts, errors = parse_checkout_csv(parsed_bytes["checkout"])
         if errors:
             logger.warning("Errors parsing check-out data: %s", errors[:5])
+        parsed_checkouts = _filter_rows_by_date(parsed_checkouts, filter_from, filter_to)
         store.update("checkout", parsed_checkouts)
+        row_counts["checkout"] = len(parsed_checkouts)
         logger.info("Uploaded %d check-out records", len(parsed_checkouts))
     
     if "breaks" in parsed_bytes:
         parsed_breaks, errors = parse_breaks_csv(parsed_bytes["breaks"])
         if errors:
             logger.warning("Errors parsing breaks data: %s", errors[:5])
+        parsed_breaks = _filter_rows_by_date(parsed_breaks, filter_from, filter_to)
         store.update("breaks", parsed_breaks)
+        row_counts["breaks"] = len(parsed_breaks)
         logger.info("Uploaded %d break records", len(parsed_breaks))
+    
+    range_note = ""
+    if filter_from or filter_to:
+        range_note = f" (filtered: {filter_from or '...'} to {filter_to or '...'})"
     
     return UploadResponse(
         status="ok",
-        found=found_counts,
-        message=f"Successfully uploaded pasted data: {found_counts['checkin']} check-ins, {found_counts['checkout']} check-outs, {found_counts['breaks']} breaks"
+        found=row_counts,
+        message=f"Successfully uploaded: {row_counts['checkin']} check-ins, {row_counts['checkout']} check-outs, {row_counts['breaks']} breaks{range_note}"
     )
 
 
@@ -238,20 +270,29 @@ async def upload_csv(files: List[UploadFile] = File(...)):
     # This ensures a clean state when uploading files
     store.clear()
     
+    row_counts = {"checkin": 0, "checkout": 0, "breaks": 0}
+    
     # Then update with new data
     if parsed.checkins:
         store.update("checkin", parsed.checkins)
+        row_counts["checkin"] = len(parsed.checkins)
         logger.info("Uploaded %d check-in records", len(parsed.checkins))
     
     if parsed.checkouts:
         store.update("checkout", parsed.checkouts)
+        row_counts["checkout"] = len(parsed.checkouts)
         logger.info("Uploaded %d check-out records", len(parsed.checkouts))
     
     if parsed.breaks:
         store.update("breaks", parsed.breaks)
+        row_counts["breaks"] = len(parsed.breaks)
         logger.info("Uploaded %d break records", len(parsed.breaks))
 
-    return UploadResponse(status="ok", found=found_counts)
+    return UploadResponse(
+        status="ok",
+        found=row_counts,
+        message=f"Successfully uploaded: {row_counts['checkin']} check-ins, {row_counts['checkout']} check-outs, {row_counts['breaks']} breaks",
+    )
 
 
 def _prepare_person_days() -> List[PersonDay]:
