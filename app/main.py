@@ -419,6 +419,23 @@ def compute_attendance(payload: ComputeRequest = Body(...)):
         raise HTTPException(status_code=500, detail=error_detail)
 
 
+def _parse_holidays_from_query(holidays_str: Optional[str]) -> list:
+    """Parse '2025-01-01|New Year,2025-01-26|Republic Day' into Holiday dicts."""
+    if not holidays_str or not holidays_str.strip():
+        return []
+    result = []
+    for part in holidays_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "|" in part:
+            date_part, name_part = part.split("|", 1)
+            result.append({"date": date_part.strip(), "name": name_part.strip() or ""})
+        else:
+            result.append({"date": part, "name": ""})
+    return result
+
+
 def _days_for_export(
     include_sundays: bool = False,
     include_holidays: bool = False,
@@ -437,7 +454,7 @@ def _days_for_export(
     request = ComputeRequest(
         include_sundays=include_sundays,
         include_holidays=include_holidays,
-        holidays=[{"date": h.strip(), "name": ""} for h in holidays.split(",") if h.strip()] if holidays else [],
+        holidays=_parse_holidays_from_query(holidays),
         filters=filters_payload,
     )
     base_days = _prepare_person_days()
