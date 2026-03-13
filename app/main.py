@@ -66,6 +66,26 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/debug/dates")
+def debug_dates():
+    """Return date distribution of stored check-ins to diagnose sync issues."""
+    checkins = store.get("checkin")
+    by_month: Dict[str, int] = {}
+    for r in checkins:
+        d = r.get("_local_date")
+        if not d:
+            continue
+        month = d[:7] if len(d) >= 7 else d  # YYYY-MM
+        by_month[month] = by_month.get(month, 0) + 1
+    months = sorted(by_month.keys())
+    return {
+        "total_checkins": len(checkins),
+        "checkins_with_date": sum(by_month.values()),
+        "by_month": {m: by_month[m] for m in months},
+        "date_range": {"min": months[0], "max": months[-1]} if months else None,
+    }
+
+
 @app.get("/clear-cache")
 @app.post("/clear-cache")
 def clear_cache():
